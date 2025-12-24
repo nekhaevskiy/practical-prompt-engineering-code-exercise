@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Prompt Library</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="header">
+        <h1 class="title">Prompt Library</h1>
+        <p class="subtitle">Save and manage reusable prompts locally.</p>
+      </header>
+
+      <main class="main">
+        <section class="panel" aria-labelledby="form-title">
+          <h2 id="form-title" class="panelTitle">New Prompt</h2>
+          <form id="promptForm" class="form" autocomplete="off">
+            <label class="field">
+              <span class="label">Title</span>
+              <input
+                id="promptTitle"
+                name="title"
+                class="input"
+                type="text"
+                placeholder="e.g., Summarize meeting notes"
+                required
+              />
+            </label>
+
+            <label class="field">
+              <span class="label">Content</span>
+              <textarea
+                id="promptContent"
+                name="content"
+                class="textarea"
+                placeholder="Write your prompt here..."
+                rows="6"
+                required
+              ></textarea>
+            </label>
+
+            <div class="actions">
+              <button id="savePrompt" class="button" type="submit">Save Prompt</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel" aria-labelledby="library-title">
+          <div class="panelHeader">
+            <h2 id="library-title" class="panelTitle">Saved Prompts</h2>
+          </div>
+
+          <div id="promptList" class="grid" aria-live="polite"></div>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <span class="footerText">Stored in your browser via localStorage.</span>
+      </footer>
+    </div>
+
+    <script src="script.js"></script>
+  </body>
+</html>
