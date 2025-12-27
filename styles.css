@@ -281,3 +281,142 @@ body {
 .footerText {
   display: inline-block;
 }
+
+/* Notes */
+.notes {
+  margin-top: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.notesTitle {
+  margin: 0 0 6px 0;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.notesAdd {
+  display: grid;
+  gap: 6px;
+}
+
+.notesTextarea,
+.noteEditTextarea {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: inherit;
+  padding: 8px 10px;
+  outline: none;
+  resize: vertical;
+}
+
+.notesTextarea:focus,
+.noteEditTextarea:focus {
+  border-color: rgba(29, 78, 216, 0.65);
+  box-shadow: 0 0 0 3px rgba(29, 78, 216, 0.18);
+}
+
+.notesList {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.noteItem {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 10px;
+  padding: 8px;
+}
+
+.noteText {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.noteActions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.noteBtn {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.noteBtn:hover {
+  background: #eef2ff;
+}
+
+.noteEmpty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Metadata */
+.metadata {
+  margin-top: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.metaRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.metaLabel {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.metaValue {
+  font-size: 13px;
+}
+
+.confidence {
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.confidence-high {
+  color: #16a34a; /* green */
+  border-color: #16a34a;
+  background: #ecfdf5;
+}
+
+.confidence-medium {
+  color: #ca8a04; /* yellow */
+  border-color: #ca8a04;
+  background: #fef9c3;
+}
+
+.confidence-low {
+  color: #dc2626; /* red */
+  border-color: #dc2626;
+  background: #fee2e2;
+}
+
+/* Form error */
+.formError {
+  margin-top: 8px;
+  color: #dc2626;
+  font-size: 12px;
+}

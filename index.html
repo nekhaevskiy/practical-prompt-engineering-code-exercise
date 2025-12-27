@@ -30,6 +30,19 @@
             </label>
 
             <label class="field">
+              <span class="label">Model Name</span>
+              <input
+                id="modelName"
+                name="model"
+                class="input"
+                type="text"
+                maxlength="100"
+                placeholder="e.g., MyModel-1"
+                required
+              />
+            </label>
+
+            <label class="field">
               <span class="label">Content</span>
               <textarea
                 id="promptContent"
@@ -44,6 +57,7 @@
             <div class="actions">
               <button id="savePrompt" class="button" type="submit">Save Prompt</button>
             </div>
+            <div id="formError" class="formError" role="alert" aria-live="polite"></div>
           </form>
         </section>
 

@@ -1,11 +1,128 @@
 (() => {
   const STORAGE_KEY = "prompt-library.prompts";
   const USER_RATINGS_KEY = "prompt-library.userRatings";
+  const NOTES_KEY = "prompt-library.notes";
 
   const form = document.getElementById("promptForm");
   const titleInput = document.getElementById("promptTitle");
   const contentInput = document.getElementById("promptContent");
   const listEl = document.getElementById("promptList");
+  const modelInput = document.getElementById("modelName");
+  const formErrorEl = document.getElementById("formError");
+
+  // Metadata & Validation
+  function isValidISO8601(str) {
+    if (typeof str !== "string" || !str) return false;
+    try {
+      const d = new Date(str);
+      return d.toISOString() === str && /Z$/.test(str);
+    } catch {
+      return false;
+    }
+  }
+
+  function isLikelyCode(text) {
+    const t = String(text || "");
+    const patterns = [
+      /\bfunction\b|\bclass\b|=>|import\s+|export\s+|const\s+|let\s+|var\s+/, 
+      /#include|using\s+namespace|public\s+static|System\./,
+      /\bdef\b|\breturn\b|:\n|\{\s*\}|;|<[^>]+>/
+    ];
+    return patterns.some((re) => re.test(t));
+  }
+
+  function estimateTokens(text, isCode) {
+    const s = String(text || "").trim();
+    const words = s ? s.split(/\s+/).filter(Boolean).length : 0;
+    const chars = s.length;
+    let min = 0.75 * words;
+    let max = 0.25 * chars;
+    if (isCode) {
+      min *= 1.3;
+      max *= 1.3;
+    }
+    min = Math.round(min);
+    max = Math.round(max);
+    const upper = Math.max(min, max);
+    let confidence = "high";
+    if (upper >= 1000 && upper <= 5000) confidence = "medium";
+    else if (upper > 5000) confidence = "low";
+    return { min, max, confidence };
+  }
+
+  function trackModel(modelName, content) {
+    const name = typeof modelName === "string" ? modelName.trim() : "";
+    if (!name) throw new Error("Model name must be a non-empty string.");
+    if (name.length > 100) throw new Error("Model name must be at most 100 characters.");
+
+    const createdAt = new Date().toISOString();
+    const tokenEstimate = estimateTokens(content, isLikelyCode(content));
+    const updatedAt = createdAt;
+    return { model: name, createdAt, updatedAt, tokenEstimate };
+  }
+
+  function updateTimestamps(metadata) {
+    if (!metadata || typeof metadata !== "object") {
+      throw new Error("Metadata must be an object.");
+    }
+    const { createdAt } = metadata;
+    if (!isValidISO8601(createdAt)) {
+      throw new Error("createdAt must be a valid ISO 8601 string.");
+    }
+    const nowIso = new Date().toISOString();
+    if (!isValidISO8601(nowIso)) {
+      throw new Error("updatedAt must be a valid ISO 8601 string.");
+    }
+    const createdMs = Date.parse(createdAt);
+    const updatedMs = Date.parse(nowIso);
+    if (!(updatedMs >= createdMs)) {
+      throw new Error("updatedAt must be greater than or equal to createdAt.");
+    }
+    return { ...metadata, updatedAt: nowIso };
+  }
+
+  function bumpPromptUpdatedAt(promptId) {
+    try {
+      const prompts = loadPrompts();
+      const idx = prompts.findIndex((p) => p.id === promptId);
+      if (idx === -1) return;
+      const meta = prompts[idx].metadata;
+      if (meta) {
+        prompts[idx].metadata = updateTimestamps(meta);
+        savePrompts(prompts);
+      }
+    } catch (err) {
+      console.error("Failed to update prompt timestamp:", err);
+    }
+  }
+
+  // Notes store helpers
+  function loadNotesStore() {
+    try {
+      const raw = localStorage.getItem(NOTES_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function saveNotesStore(store) {
+    localStorage.setItem(NOTES_KEY, JSON.stringify(store));
+  }
+
+  function getNotes(promptId) {
+    const store = loadNotesStore();
+    const arr = Array.isArray(store[promptId]) ? store[promptId] : [];
+    // newest first by updatedAt (fallback to createdAt)
+    return [...arr].sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+  }
+
+  function setNotes(promptId, notesArray) {
+    const store = loadNotesStore();
+    store[promptId] = notesArray;
+    saveNotesStore(store);
+  }
 
   function loadPrompts() {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -134,6 +251,7 @@
 
     const prompts = loadPrompts().map((p) => (p.id === prompt.id ? { ...p, ratings: nextAgg } : p));
     savePrompts(prompts);
+    bumpPromptUpdatedAt(prompt.id);
 
     updateStarsVisual(starsEl, newRating);
     metaEl.textContent = formatRatingMeta(nextAgg);
@@ -198,7 +316,13 @@
 
     listEl.innerHTML = "";
 
-    for (const prompt of prompts) {
+    const sorted = [...prompts].sort((a, b) => {
+      const aTime = a.metadata && a.metadata.createdAt ? Date.parse(a.metadata.createdAt) : 0;
+      const bTime = b.metadata && b.metadata.createdAt ? Date.parse(b.metadata.createdAt) : 0;
+      return bTime - aTime;
+    });
+
+    for (const prompt of sorted) {
       const card = document.createElement("article");
       card.className = "card";
 
@@ -221,6 +345,12 @@
           delete map[prompt.id];
           saveUserRatings(map);
         }
+        // remove any notes for this prompt
+        const notesStore = loadNotesStore();
+        if (notesStore[prompt.id]) {
+          delete notesStore[prompt.id];
+          saveNotesStore(notesStore);
+        }
         render();
       });
 
@@ -236,6 +366,12 @@
 
       mountRating(prompt, card);
 
+      // Metadata section
+      mountMetadata(prompt, card);
+
+      // Notes section
+      mountNotes(prompt, card);
+
       listEl.appendChild(card);
     }
   }
@@ -244,16 +380,29 @@
     e.preventDefault();
 
     const title = titleInput.value.trim();
+    const model = modelInput.value.trim();
     const content = contentInput.value.trim();
 
+    if (formErrorEl) formErrorEl.textContent = "";
     if (!title || !content) return;
+
+    let metadata;
+    try {
+      metadata = trackModel(model, content);
+    } catch (err) {
+      if (formErrorEl) {
+        formErrorEl.textContent = err && err.message ? err.message : "Failed to create metadata.";
+      }
+      return;
+    }
 
     const prompts = loadPrompts();
     prompts.unshift({
       id: String(Date.now()) + "-" + Math.random().toString(16).slice(2),
       title,
       content,
-      ratings: { average: 0, count: 0 }
+      ratings: { average: 0, count: 0 },
+      metadata
     });
 
     savePrompts(prompts);
@@ -265,4 +414,264 @@
   });
 
   render();
+  
+  // Notes UI & logic
+  function mountNotes(prompt, containerEl) {
+    const section = document.createElement("section");
+    section.className = "notes";
+    section.dataset.promptId = prompt.id;
+
+    const title = document.createElement("h4");
+    title.className = "notesTitle";
+    title.textContent = "Notes";
+    title.id = `notes-title-${prompt.id}`;
+    section.setAttribute("aria-labelledby", title.id);
+
+    const addWrap = document.createElement("div");
+    addWrap.className = "notesAdd";
+
+    const textarea = document.createElement("textarea");
+    textarea.className = "notesTextarea";
+    textarea.rows = 3;
+    textarea.placeholder = "Add a note...";
+    textarea.setAttribute("aria-label", "Add note");
+
+    const addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.className = "button notesAddButton";
+    addBtn.textContent = "Add Note";
+    addBtn.setAttribute("aria-label", "Add note");
+
+    addWrap.appendChild(textarea);
+    addWrap.appendChild(addBtn);
+
+    const list = document.createElement("ul");
+    list.className = "notesList";
+
+    section.appendChild(title);
+    section.appendChild(addWrap);
+    section.appendChild(list);
+
+    containerEl.appendChild(section);
+
+    renderNotesList(prompt.id, list);
+
+    // Event delegation for notes actions within this section
+    section.addEventListener("click", (e) => {
+      const target = e.target;
+      if (!(target instanceof HTMLElement)) return;
+
+      // Add note
+      if (target.closest(".notesAddButton")) {
+        const text = textarea.value.trim();
+        if (!text) return;
+        const now = Date.now();
+        const newNote = {
+          id: String(now) + "-" + Math.random().toString(16).slice(2),
+          promptId: prompt.id,
+          content: text,
+          createdAt: now,
+          updatedAt: now
+        };
+        const current = getNotes(prompt.id);
+        current.unshift(newNote);
+        setNotes(prompt.id, current);
+        textarea.value = "";
+        renderNotesList(prompt.id, list);
+        bumpPromptUpdatedAt(prompt.id);
+        return;
+      }
+
+      // Row-level actions
+      const item = target.closest(".noteItem");
+      if (!item) return;
+      const noteId = item.getAttribute("data-note-id");
+      if (!noteId) return;
+
+      if (target.closest(".noteEdit")) {
+        enterEditMode(item);
+        return;
+      }
+      if (target.closest(".noteCancel")) {
+        exitEditMode(item, false);
+        return;
+      }
+      if (target.closest(".noteSave")) {
+        const ta = item.querySelector(".noteEditTextarea");
+        const val = ta && ta.value ? ta.value.trim() : "";
+        if (!val) {
+          // empty after trim: treat as no-op
+          exitEditMode(item, false);
+          return;
+        }
+        const notes = getNotes(prompt.id);
+        const idx = notes.findIndex((n) => n.id === noteId);
+        if (idx !== -1) {
+          notes[idx] = { ...notes[idx], content: val, updatedAt: Date.now() };
+          setNotes(prompt.id, notes);
+        }
+        renderNotesList(prompt.id, list);
+        bumpPromptUpdatedAt(prompt.id);
+        return;
+      }
+      if (target.closest(".noteDelete")) {
+        const notes = getNotes(prompt.id).filter((n) => n.id !== noteId);
+        setNotes(prompt.id, notes);
+        renderNotesList(prompt.id, list);
+        bumpPromptUpdatedAt(prompt.id);
+        return;
+      }
+    });
+  }
+
+  function renderNotesList(promptId, listEl) {
+    const notes = getNotes(promptId);
+    listEl.innerHTML = "";
+    if (notes.length === 0) {
+      const empty = document.createElement("li");
+      empty.className = "noteEmpty";
+      empty.textContent = "No notes yet.";
+      listEl.appendChild(empty);
+      return;
+    }
+    for (const note of notes) {
+      const li = document.createElement("li");
+      li.className = "noteItem";
+      li.setAttribute("data-note-id", note.id);
+
+      const text = document.createElement("p");
+      text.className = "noteText";
+      text.textContent = note.content;
+
+      const actions = document.createElement("div");
+      actions.className = "noteActions";
+
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "noteBtn noteEdit";
+      editBtn.textContent = "Edit";
+      editBtn.setAttribute("aria-label", "Edit note");
+
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "deleteButton noteDelete";
+      delBtn.textContent = "Delete";
+      delBtn.setAttribute("aria-label", "Delete note");
+
+      actions.appendChild(editBtn);
+      actions.appendChild(delBtn);
+
+      li.appendChild(text);
+      li.appendChild(actions);
+      listEl.appendChild(li);
+    }
+  }
+
+  function enterEditMode(itemEl) {
+    const textEl = itemEl.querySelector(".noteText");
+    if (!textEl) return;
+    const current = textEl.textContent || "";
+    const ta = document.createElement("textarea");
+    ta.className = "noteEditTextarea";
+    ta.rows = 3;
+    ta.value = current;
+
+    const actions = itemEl.querySelector(".noteActions");
+    if (!actions) return;
+    actions.innerHTML = "";
+
+    const saveBtn = document.createElement("button");
+    saveBtn.type = "button";
+    saveBtn.className = "button noteSave";
+    saveBtn.textContent = "Save";
+    saveBtn.setAttribute("aria-label", "Save note");
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "noteBtn noteCancel";
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.setAttribute("aria-label", "Cancel edit");
+
+    textEl.replaceWith(ta);
+    actions.appendChild(saveBtn);
+    actions.appendChild(cancelBtn);
+    ta.focus();
+  }
+
+  function exitEditMode(itemEl, reRender) {
+    // Caller usually re-renders the list; this is a no-op helper.
+    if (reRender) {
+      const section = itemEl.closest(".notes");
+      if (!section) return;
+      const promptId = section.dataset.promptId;
+      const list = section.querySelector(".notesList");
+      if (promptId && list) renderNotesList(promptId, list);
+    }
+  }
+
+  function mountMetadata(prompt, containerEl) {
+    const meta = prompt.metadata || null;
+    const section = document.createElement("section");
+    section.className = "metadata";
+
+    const modelRow = document.createElement("div");
+    modelRow.className = "metaRow";
+    const modelLabel = document.createElement("span");
+    modelLabel.className = "metaLabel";
+    modelLabel.textContent = "Model";
+    const modelValue = document.createElement("span");
+    modelValue.className = "metaValue";
+    modelValue.textContent = meta && meta.model ? meta.model : "—";
+    modelRow.appendChild(modelLabel);
+    modelRow.appendChild(modelValue);
+
+    const createdRow = document.createElement("div");
+    createdRow.className = "metaRow";
+    const createdLabel = document.createElement("span");
+    createdLabel.className = "metaLabel";
+    createdLabel.textContent = "Created";
+    const createdValue = document.createElement("span");
+    createdValue.className = "metaValue";
+    createdValue.textContent = meta && meta.createdAt ? new Date(meta.createdAt).toLocaleString() : "—";
+    createdRow.appendChild(createdLabel);
+    createdRow.appendChild(createdValue);
+
+    const updatedRow = document.createElement("div");
+    updatedRow.className = "metaRow";
+    const updatedLabel = document.createElement("span");
+    updatedLabel.className = "metaLabel";
+    updatedLabel.textContent = "Updated";
+    const updatedValue = document.createElement("span");
+    updatedValue.className = "metaValue";
+    updatedValue.textContent = meta && meta.updatedAt ? new Date(meta.updatedAt).toLocaleString() : "—";
+    updatedRow.appendChild(updatedLabel);
+    updatedRow.appendChild(updatedValue);
+
+    const tokensRow = document.createElement("div");
+    tokensRow.className = "metaRow";
+    const tokensLabel = document.createElement("span");
+    tokensLabel.className = "metaLabel";
+    tokensLabel.textContent = "Token Estimate";
+    const tokensValue = document.createElement("span");
+    tokensValue.className = "metaValue";
+    const est = meta && meta.tokenEstimate ? meta.tokenEstimate : null;
+    const text = est ? `${est.min}–${est.max} tokens` : "—";
+    const badge = document.createElement("span");
+    badge.className = "confidence";
+    const confidence = est ? est.confidence : "high";
+    if (confidence === "high") badge.classList.add("confidence-high");
+    else if (confidence === "medium") badge.classList.add("confidence-medium");
+    else badge.classList.add("confidence-low");
+    badge.textContent = confidence;
+    tokensValue.textContent = text + " ";
+    tokensValue.appendChild(badge);
+    tokensRow.appendChild(tokensLabel);
+    tokensRow.appendChild(tokensValue);
+
+    section.appendChild(modelRow);
+    section.appendChild(createdRow);
+    section.appendChild(updatedRow);
+    section.appendChild(tokensRow);
+    containerEl.appendChild(section);
+  }
 })();
