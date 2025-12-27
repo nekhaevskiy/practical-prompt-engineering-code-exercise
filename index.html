@@ -11,6 +11,12 @@
       <header class="header">
         <h1 class="title">Prompt Library</h1>
         <p class="subtitle">Save and manage reusable prompts locally.</p>
+        <div class="toolbar" aria-label="Import/Export controls">
+          <button id="exportBtn" class="button" type="button">Export</button>
+          <button id="importBtn" class="button" type="button">Import</button>
+          <input id="importFile" type="file" accept="application/json" style="display:none" aria-hidden="true" />
+        </div>
+        <div id="importExportMessage" class="message" role="alert" aria-live="polite"></div>
       </header>
 
       <main class="main">

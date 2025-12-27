@@ -9,6 +9,10 @@
   const listEl = document.getElementById("promptList");
   const modelInput = document.getElementById("modelName");
   const formErrorEl = document.getElementById("formError");
+  const exportBtn = document.getElementById("exportBtn");
+  const importBtn = document.getElementById("importBtn");
+  const importFileInput = document.getElementById("importFile");
+  const messageEl = document.getElementById("importExportMessage");
 
   // Metadata & Validation
   function isValidISO8601(str) {
@@ -93,6 +97,242 @@
       }
     } catch (err) {
       console.error("Failed to update prompt timestamp:", err);
+    }
+  }
+
+  // ===== Export / Import helpers =====
+  const SCHEMA_VERSION = "1.0.0";
+
+  function setMessage(text, isError) {
+    if (!messageEl) return;
+    messageEl.textContent = text || "";
+    messageEl.style.color = isError ? "#dc2626" : "var(--muted)";
+  }
+
+  function validateRatings(ratings) {
+    if (!ratings || typeof ratings !== "object") return false;
+    const { average, count } = ratings;
+    if (typeof average !== "number" || typeof count !== "number") return false;
+    if (average < 0 || average > 5) return false;
+    if (count < 0) return false;
+    return true;
+  }
+
+  function validateTokenEstimate(est) {
+    if (!est || typeof est !== "object") return false;
+    const { min, max, confidence } = est;
+    if (typeof min !== "number" || typeof max !== "number") return false;
+    if (!["high", "medium", "low"].includes(confidence)) return false;
+    return true;
+  }
+
+  function validatePromptShape(p) {
+    if (!p || typeof p !== "object") return false;
+    if (typeof p.id !== "string" || !p.id) return false;
+    if (typeof p.title !== "string" || typeof p.content !== "string") return false;
+    if (!validateRatings(p.ratings)) return false;
+    const m = p.metadata;
+    if (!m || typeof m !== "object") return false;
+    if (typeof m.model !== "string" || !m.model) return false;
+    if (!isValidISO8601(m.createdAt) || !isValidISO8601(m.updatedAt)) return false;
+    if (!validateTokenEstimate(m.tokenEstimate)) return false;
+    return true;
+  }
+
+  function loadAllData() {
+    const prompts = loadPrompts();
+    const ratings = loadUserRatings();
+    const notes = loadNotesStore();
+    return { prompts, ratings, notes };
+  }
+
+  function computeStatistics(prompts) {
+    const totalPrompts = Array.isArray(prompts) ? prompts.length : 0;
+    // Weighted average across rating counts; if no counts, null
+    let totalCount = 0;
+    let totalWeighted = 0;
+    const modelCount = new Map();
+    for (const p of prompts || []) {
+      const c = (p.ratings && p.ratings.count) || 0;
+      const a = (p.ratings && p.ratings.average) || 0;
+      totalCount += c;
+      totalWeighted += a * c;
+      const model = p.metadata && p.metadata.model ? p.metadata.model : "";
+      if (model) modelCount.set(model, (modelCount.get(model) || 0) + 1);
+    }
+    const averageRating = totalCount ? Math.round((totalWeighted / totalCount) * 10) / 10 : null;
+    let mostUsedModel = null;
+    for (const [model, count] of modelCount.entries()) {
+      if (!mostUsedModel || count > (modelCount.get(mostUsedModel) || 0)) {
+        mostUsedModel = model;
+      }
+    }
+    return { totalPrompts, averageRating, mostUsedModel };
+  }
+
+  function buildExportPayload() {
+    const { prompts, ratings, notes } = loadAllData();
+    // Validate prompts
+    for (const p of prompts) {
+      if (!validatePromptShape(p)) {
+        throw new Error("Invalid prompt structure detected during export.");
+      }
+    }
+    const stats = computeStatistics(prompts);
+    return {
+      version: SCHEMA_VERSION,
+      exportedAt: new Date().toISOString(),
+      stats,
+      data: {
+        prompts,
+        userRatings: ratings,
+        notes
+      }
+    };
+  }
+
+  function downloadJSON(obj, filenameBase) {
+    const json = JSON.stringify(obj, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const ts = new Date();
+    const stamp = `${ts.getFullYear()}${String(ts.getMonth() + 1).padStart(2, "0")}${String(ts.getDate()).padStart(2, "0")}-${String(ts.getHours()).padStart(2, "0")}${String(ts.getMinutes()).padStart(2, "0")}${String(ts.getSeconds()).padStart(2, "0")}`;
+    a.href = url;
+    a.download = `${filenameBase}-${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function validatePayload(payload) {
+    if (!payload || typeof payload !== "object") throw new Error("Invalid file: not a JSON object.");
+    const { version, exportedAt, stats, data } = payload;
+    if (version !== SCHEMA_VERSION) throw new Error(`Unsupported version: ${version}`);
+    if (!isValidISO8601(exportedAt)) throw new Error("Invalid exportedAt timestamp.");
+    if (!stats || typeof stats !== "object") throw new Error("Missing statistics.");
+    if (!data || typeof data !== "object") throw new Error("Missing data section.");
+    const { prompts, userRatings, notes } = data;
+    if (!Array.isArray(prompts)) throw new Error("Data.prompts must be an array.");
+    for (const p of prompts) {
+      if (!validatePromptShape(p)) throw new Error("Invalid prompt structure in payload.");
+    }
+    if (userRatings && typeof userRatings !== "object") throw new Error("userRatings must be an object if present.");
+    if (notes && typeof notes !== "object") throw new Error("notes must be an object if present.");
+  }
+
+  function backupCurrent() {
+    const { prompts, ratings, notes } = loadAllData();
+    return {
+      prompts: JSON.parse(JSON.stringify(prompts)),
+      ratings: JSON.parse(JSON.stringify(ratings)),
+      notes: JSON.parse(JSON.stringify(notes))
+    };
+  }
+
+  function restoreBackup(b) {
+    if (!b) return;
+    try {
+      savePrompts(b.prompts || []);
+      saveUserRatings(b.ratings || {});
+      saveNotesStore(b.notes || {});
+    } catch (err) {
+      console.error("Failed to restore backup:", err);
+    }
+  }
+
+  function resolveDuplicateStrategy() {
+    // Ask the user how to handle duplicates. Return one of 'skip' | 'overwrite' | 'reassign'.
+    const choice = window.prompt(
+      "Duplicate IDs found. Choose strategy:\n- skip: keep existing, skip imported duplicates\n- overwrite: replace existing with imported\n- reassign: generate new IDs for imported duplicates",
+      "skip"
+    );
+    const val = String((choice || "").toLowerCase());
+    if (["skip", "overwrite", "reassign"].includes(val)) return val;
+    return "skip";
+  }
+
+  function withDuplicateStrategy(existing, incoming, strategy) {
+    const existingIds = new Set(existing.map((p) => p.id));
+    const merged = [...existing];
+    for (const p of incoming) {
+      if (!existingIds.has(p.id)) {
+        merged.push(p);
+        existingIds.add(p.id);
+        continue;
+      }
+      if (strategy === "skip") {
+        // ignore incoming duplicate
+        continue;
+      } else if (strategy === "overwrite") {
+        const idx = merged.findIndex((x) => x.id === p.id);
+        if (idx !== -1) merged[idx] = p;
+      } else if (strategy === "reassign") {
+        const newId = String(Date.now()) + "-" + Math.random().toString(16).slice(2);
+        merged.push({ ...p, id: newId });
+        existingIds.add(newId);
+      }
+    }
+    return merged;
+  }
+
+  function exportAll() {
+    try {
+      const payload = buildExportPayload();
+      downloadJSON(payload, "prompt-library-export");
+      setMessage("Export completed.", false);
+    } catch (err) {
+      setMessage(err && err.message ? err.message : "Export failed.", true);
+    }
+  }
+
+  async function importFromFile(file) {
+    if (!file) return;
+    const backup = backupCurrent();
+    try {
+      const text = await file.text();
+      const payload = JSON.parse(text);
+      validatePayload(payload);
+      const incomingPrompts = payload.data.prompts || [];
+      const incomingRatings = payload.data.userRatings || {};
+      const incomingNotes = payload.data.notes || {};
+
+      const currentPrompts = loadPrompts();
+      const hasDuplicates = incomingPrompts.some((p) => currentPrompts.some((c) => c.id === p.id));
+
+      // Ask merge vs replace
+      const doMerge = window.confirm("Import: Merge with existing data? Click Cancel to Replace.");
+
+      let nextPrompts;
+      if (doMerge) {
+        const strategy = hasDuplicates ? resolveDuplicateStrategy() : "skip";
+        nextPrompts = withDuplicateStrategy(currentPrompts, incomingPrompts, strategy);
+      } else {
+        nextPrompts = [...incomingPrompts];
+      }
+
+      // Merge ratings and notes similarly on merge; replace if not merging
+      let nextRatings;
+      let nextNotes;
+      if (doMerge) {
+        nextRatings = { ...loadUserRatings(), ...incomingRatings };
+        nextNotes = { ...loadNotesStore(), ...incomingNotes };
+      } else {
+        nextRatings = { ...incomingRatings };
+        nextNotes = { ...incomingNotes };
+      }
+
+      // Write all
+      savePrompts(nextPrompts);
+      saveUserRatings(nextRatings);
+      saveNotesStore(nextNotes);
+
+      setMessage("Import succeeded.", false);
+      render();
+    } catch (err) {
+      setMessage(err && err.message ? err.message : "Import failed.", true);
+      restoreBackup(backup);
     }
   }
 
@@ -414,6 +654,21 @@
   });
 
   render();
+
+  // ===== Wire up import/export UI =====
+  if (exportBtn) {
+    exportBtn.addEventListener("click", () => exportAll());
+  }
+  if (importBtn && importFileInput) {
+    importBtn.addEventListener("click", () => {
+      importFileInput.value = "";
+      importFileInput.click();
+    });
+    importFileInput.addEventListener("change", () => {
+      const f = importFileInput.files && importFileInput.files[0];
+      if (f) importFromFile(f);
+    });
+  }
   
   // Notes UI & logic
   function mountNotes(prompt, containerEl) {
